@@ -530,23 +530,94 @@ async function startPipeline(){
   try{
     setP(5,'Extrayendo texto de archivos…');
     const mat=await extractAll();if(S.cancelled)return;log(`✓ Material: ${mat.length} caracteres`,'ok');
+
+    // Chunking: send up to 12000 chars to planner, 20000 to writer (split across messages if needed)
+    const matShort = mat.slice(0,12000);
+    const matFull  = mat.slice(0,20000);
+
     setAg('ag-planner','active');setP(15,'Agente 1/5 — Planificador…');log('📋 Planificador: analizando…','ag');
-    const r1=await ai(key,model,`Eres el agente Planificador de un sistema multiagente de presentaciones.\nMATERIAL:\n"""\n${mat.slice(0,6000)}\n"""\nPARÁMETROS: Título:${title} | Slides:${n}(EXACTO,portada+cierre) | Idioma:${ls} | Detalle:${detail} | Audiencia:${aud||'general'} | Extra:${extra||'ninguna'}\nResponde SOLO JSON sin markdown:\n{"title":"...","subtitle":"...","slides":[{"num":1,"type":"cover","title":"...","subtitle":"...","key_points":[],"image_query":"EN INGLÉS","speaker_notes":"en ${ls}"}]}\nTipos:cover,agenda,content,data,quote,image-full,two-col,closing. Exactamente ${n} slides.`,3500);
+    const r1=await ai(key,model,`Eres el agente Planificador de un sistema multiagente de presentaciones académicas/profesionales de ALTA CALIDAD.
+
+MATERIAL DE PARTIDA (primeros 12000 chars):
+"""
+${matShort}
+"""
+
+PARÁMETROS:
+- Título: ${title}
+- Número de diapositivas: EXACTAMENTE ${n} (incluye portada como #1 y cierre como #${n})
+- Idioma: ${ls}
+- Nivel de detalle: ${detail}
+- Audiencia: ${aud||'general'}
+- Instrucciones extra: ${extra||'ninguna'}
+
+TAREA: Genera un índice DETALLADO y TEMÁTICAMENTE RICO de ${n} diapositivas. Cada diapositiva debe cubrir un aspecto ESPECÍFICO del material, no temas genéricos. Usa los datos, conceptos y argumentos reales del texto.
+
+Responde SOLO con JSON válido sin ningún texto adicional ni markdown:
+{"title":"...","subtitle":"...","slides":[{"num":1,"type":"cover","title":"título específico","subtitle":"subtítulo descriptivo","key_points":["punto clave 1","punto clave 2","punto clave 3"],"image_query":"query descriptivo EN INGLÉS para Unsplash","speaker_notes":"notas detalladas en ${ls}"}]}
+
+Tipos disponibles: cover, agenda, content, data, quote, image-full, two-col, closing
+OBLIGATORIO: exactamente ${n} diapositivas en el array. Portada (#1) tipo cover, cierre (#${n}) tipo closing.`,4000);
     if(S.cancelled)return;
     let plan;try{plan=JSON.parse(jc(r1));if(!plan.slides?.length)throw 0;}catch(e){throw new Error('Planificador: JSON inválido.');}
+    // Normalize to exactly n slides
+    while(plan.slides.length < n) plan.slides.push({num:plan.slides.length+1,type:'content',title:'Slide '+(plan.slides.length+1),subtitle:'',key_points:[],image_query:title,speaker_notes:''});
+    plan.slides = plan.slides.slice(0,n);
+    plan.slides.forEach((s,i)=>s.num=i+1);
     setAg('ag-planner','done');log(`✓ Plan: ${plan.slides.length} slides`,'ok');
-    setAg('ag-writer','active');setP(33,'Agente 2/5 — Redactor…');log('✍️ Redactor: generando contenido…','ag');
-    const r2=await ai(key,model,`Eres el agente Redactor.\nPLAN:\n${JSON.stringify(plan.slides,null,2)}\nMATERIAL:\n"""\n${mat.slice(0,5000)}\n"""\nIDIOMA:${ls}|DETALLE:${detail}|AUDIENCIA:${aud||'general'}\nResponde SOLO JSON:\n{"slides":[{"num":1,"type":"cover","title":"...","subtitle":"...","body":"párrafo","bullets":["..."],"quote":"si=quote","image_query":"EN INGLÉS","speaker_notes":"${ls} 2-4 frases"}]}\nBullets ≤12 palabras, speaker_notes en ${ls}.`,4500);
+
+    setAg('ag-writer','active');setP(33,'Agente 2/5 — Redactor…');log('✍️ Redactor: generando contenido RICO…','ag');
+    const r2=await ai(key,model,`Eres el agente Redactor de un sistema de presentaciones. Tu misión es generar contenido DENSO, ESPECÍFICO y RICO extrayendo información real del material fuente. NO uses frases genéricas.
+
+PLAN DE DIAPOSITIVAS:
+${JSON.stringify(plan.slides,null,2)}
+
+MATERIAL FUENTE COMPLETO (hasta 20000 chars):
+"""
+${matFull}
+"""
+
+PARÁMETROS: Idioma: ${ls} | Detalle: ${detail} | Audiencia: ${aud||'general'}
+
+INSTRUCCIONES CRÍTICAS:
+- Cada diapositiva debe tener 4-6 bullets con información ESPECÍFICA y CONCRETA extraída del texto
+- Los bullets deben contener datos reales, cifras, nombres, conceptos específicos del material
+- NO bullets genéricos como "Relevancia del tema" — usa datos concretos del texto
+- Para "profundo": el campo body debe tener 2-3 frases con contexto real
+- Para type=data: incluye cifras y estadísticas reales del documento
+- speaker_notes: 3-5 frases útiles para el presentador con detalles adicionales no en los bullets
+
+Responde SOLO con JSON válido:
+{"slides":[{"num":1,"type":"cover","title":"...","subtitle":"...","body":"párrafo contextual específico","bullets":["dato específico 1","dato específico 2","dato específico 3","dato específico 4"],"quote":"cita literal si type=quote","image_query":"EN INGLÉS","speaker_notes":"notas detalladas en ${ls}"}]}
+
+CRÍTICO: bullets siempre ≤15 palabras cada uno pero con contenido CONCRETO y ESPECÍFICO del material fuente.`,5000);
     if(S.cancelled)return;
     let cont;try{cont=JSON.parse(jc(r2));if(!cont.slides)throw 0;}catch(e){log('⚠ Redactor: usando plan base','warn');cont={slides:plan.slides.map(s=>({...s,body:'',bullets:s.key_points||[]}))};}
-    setAg('ag-writer','done');log(`✓ Contenido: ${cont.slides.length} slides`,'ok');
+    // Merge: if writer returned fewer slides, fill from plan
+    plan.slides.forEach(ps=>{if(!cont.slides.find(cs=>cs.num===ps.num))cont.slides.push({...ps,body:'',bullets:ps.key_points||[]});});
+    cont.slides.sort((a,b)=>a.num-b.num);
+    setAg('ag-writer','done');log(`✓ Contenido rico: ${cont.slides.length} slides`,'ok');
     setAg('ag-visual','active');setP(55,'Agente 3/5 — Visual: Unsplash…');log('🖼 Visual: asignando imágenes…','ag');
     const imgMap={};
     if(opts.imgs)cont.slides.forEach(sl=>{if(S.cancelled)return;imgMap[sl.num]=`https://source.unsplash.com/1200x675/?${encodeURIComponent(sl.image_query||title+' '+sl.title)}`;});
     if(!S.cancelled){setAg('ag-visual','done');log('✓ Imágenes Unsplash (libres de derechos)','ok');}
     if(S.cancelled)return;
     setAg('ag-critic','active');setP(70,'Agente 4/5 — Crítico: revisando…');log('🔍 Crítico: revisando calidad…','ag');
-    const r4=await ai(key,model,`Eres el agente Crítico. Revisa:\n${JSON.stringify(cont.slides.slice(0,10),null,2)}\nCriterios: bullets ≤12 palabras, flujo coherente, tono para "${aud||'general'}".\nResponde SOLO JSON: {"feedback":"...","improvements":[{"num":2,"bullets":["..."],"speaker_notes":"..."}]}`,2000);
+    const r4=await ai(key,model,`Eres el agente Crítico de calidad de presentaciones. Revisa el contenido y detecta problemas GRAVES.
+
+CONTENIDO A REVISAR:
+${JSON.stringify(cont.slides.slice(0,12),null,2)}
+
+CRITERIOS DE REVISIÓN (prioridad alta):
+1. Bullets demasiado genéricos (ej: "Relevancia del tema", "Aspectos importantes") → mejóralos con contenido específico
+2. Bullets > 15 palabras → acórtalos
+3. Slides con < 3 bullets → añade bullets con info del material
+4. Notas del presentador vacías o muy cortas → amplíalas
+5. Flujo narrativo incoherente entre slides
+
+Responde SOLO JSON:
+{"feedback":"valoración en una frase","improvements":[{"num":2,"bullets":["bullet mejorado específico 1","..."],"body":"body mejorado si era genérico","speaker_notes":"notas ampliadas en ${ls}"}]}
+Si todo está bien: {"feedback":"contenido rico y específico","improvements":[]}`,2500);
     if(S.cancelled)return;
     try{const fb=JSON.parse(jc(r4));log(`💬 ${fb.feedback||'OK'}`);(fb.improvements||[]).forEach(imp=>{const sl=cont.slides.find(s=>s.num===imp.num);if(sl){if(imp.bullets)sl.bullets=imp.bullets;if(imp.speaker_notes)sl.speaker_notes=imp.speaker_notes;}});if(fb.improvements?.length)log(`✓ ${fb.improvements.length} mejoras aplicadas`,'ok');}catch(e){log('⚠ Crítico: aceptado','warn');}
     setAg('ag-critic','done');if(S.cancelled)return;
@@ -590,15 +661,47 @@ function newSess(){if(!confirm('¿Nueva sesión? Se perderá la presentación ac
 
 /* ═══ BUILD PRESENTATION HTML ═══ */
 function buildPres(slides,plan,theme,opts,presTitle,lang){
+  // ink=color texto sobre sb, ci=color texto sobre cb(portada), mt=muted, li_bg=fondo de li
   const TT={
-    profesional:{ink:'#0d1b2a',paper:'#ecf0f1',ac:'#2980b9',ac2:'#e74c3c',mt:'rgba(236,240,241,.5)',hf:"'Georgia',serif",bf:"'Calibri',sans-serif",mf:"'Courier New',monospace",sb:'linear-gradient(135deg,#0d1b2a,#1b2d40)',cb:'linear-gradient(135deg,#1e3a5f,#0d1b2a)',rl:'rgba(236,240,241,.1)'},
-    editorial:{ink:'#f5f0e8',paper:'#0d0d0d',ac:'#c4501a',ac2:'#1a6b5a',mt:'rgba(13,13,13,.45)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",sb:'linear-gradient(135deg,#f5f0e8,#ede8dc)',cb:'linear-gradient(135deg,#0d0d0d,#1c1c1c)',rl:'rgba(13,13,13,.1)'},
-    oscuro:{ink:'#000',paper:'#fff',ac:'#00d4ff',ac2:'#ff00aa',mt:'rgba(255,255,255,.4)',hf:"'Courier New',monospace",bf:"'Arial',sans-serif",mf:"'Courier New',monospace",sb:'linear-gradient(135deg,#000,#0d0d0d)',cb:'linear-gradient(135deg,#000,#1a0533)',rl:'rgba(255,255,255,.07)'},
-    rust:{ink:'#c4501a',paper:'#f5f0e8',ac:'#e8c4a8',ac2:'#b8860b',mt:'rgba(245,240,232,.55)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",sb:'linear-gradient(135deg,#c4501a,#8a3410)',cb:'linear-gradient(135deg,#8a3410,#0d0d0d)',rl:'rgba(245,240,232,.12)'},
-    teal:{ink:'#1a6b5a',paper:'#f5f0e8',ac:'#a8d4c8',ac2:'#e8d8a0',mt:'rgba(245,240,232,.55)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",sb:'linear-gradient(135deg,#1a6b5a,#0f3d33)',cb:'linear-gradient(135deg,#0f3d33,#0a2a23)',rl:'rgba(245,240,232,.1)'},
-    claro:{ink:'#fff',paper:'#0c4a6e',ac:'#0ea5e9',ac2:'#f59e0b',mt:'rgba(12,74,110,.5)',hf:"'Gill Sans','Segoe UI',sans-serif",bf:"'Helvetica Neue',Arial,sans-serif",mf:"'Courier New',monospace",sb:'linear-gradient(135deg,#f0f9ff,#e0f2fe)',cb:'linear-gradient(135deg,#0ea5e9,#38bdf8)',rl:'rgba(12,74,110,.1)'}
+    profesional:{
+      ink:'#ecf0f1',ci:'#ecf0f1',ac:'#3498db',ac2:'#e74c3c',
+      mt:'rgba(236,240,241,.55)',hf:"'Georgia',serif",bf:"'Calibri',sans-serif",mf:"'Courier New',monospace",
+      sb:'linear-gradient(135deg,#0d1b2a,#1b2d40)',cb:'linear-gradient(135deg,#1e3a5f,#0d1b2a)',
+      rl:'rgba(236,240,241,.1)',li_bg:'rgba(236,240,241,.08)'
+    },
+    editorial:{
+      ink:'#0d0d0d',ci:'#f5f0e8',ac:'#c4501a',ac2:'#1a6b5a',
+      mt:'rgba(13,13,13,.52)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",
+      sb:'linear-gradient(135deg,#f5f0e8,#ede8dc)',cb:'linear-gradient(135deg,#0d0d0d,#1c1c1c)',
+      rl:'rgba(13,13,13,.1)',li_bg:'rgba(13,13,13,.07)',ci_mt:'rgba(245,240,232,.6)'
+    },
+    oscuro:{
+      ink:'#e0e0e0',ci:'#e0e0e0',ac:'#00d4ff',ac2:'#ff00aa',
+      mt:'rgba(224,224,224,.45)',hf:"'Courier New',monospace",bf:"'Arial',sans-serif",mf:"'Courier New',monospace",
+      sb:'linear-gradient(135deg,#080808,#111827)',cb:'linear-gradient(135deg,#000,#1a0533)',
+      rl:'rgba(255,255,255,.07)',li_bg:'rgba(255,255,255,.05)'
+    },
+    rust:{
+      ink:'#f5f0e8',ci:'#f5f0e8',ac:'#e8c4a8',ac2:'#e8d8a0',
+      mt:'rgba(245,240,232,.6)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",
+      sb:'linear-gradient(135deg,#c4501a,#8a3410)',cb:'linear-gradient(135deg,#6b2810,#0d0d0d)',
+      rl:'rgba(245,240,232,.15)',li_bg:'rgba(245,240,232,.1)'
+    },
+    teal:{
+      ink:'#f5f0e8',ci:'#f5f0e8',ac:'#a8d4c8',ac2:'#e8d8a0',
+      mt:'rgba(245,240,232,.6)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",
+      sb:'linear-gradient(135deg,#1a6b5a,#0f3d33)',cb:'linear-gradient(135deg,#0a2a23,#0d0d0d)',
+      rl:'rgba(245,240,232,.12)',li_bg:'rgba(245,240,232,.08)'
+    },
+    claro:{
+      ink:'#0c4a6e',ci:'#f0f9ff',ac:'#0369a1',ac2:'#d97706',
+      mt:'rgba(12,74,110,.58)',hf:"'DM Serif Display','Georgia',serif",bf:"'DM Sans',system-ui,sans-serif",mf:"'DM Mono','Courier New',monospace",
+      sb:'linear-gradient(135deg,#f0f9ff,#e0f2fe)',cb:'linear-gradient(135deg,#0369a1,#0ea5e9)',
+      rl:'rgba(12,74,110,.1)',li_bg:'rgba(12,74,110,.07)',ci_mt:'rgba(240,249,255,.7)'
+    }
   };
   const T=TT[theme]||TT.profesional;
+  const ci_mt = T.ci_mt || T.mt;
   const css=`
 *{box-sizing:border-box;margin:0;padding:0}html,body{width:100%;height:100%;background:#000;overflow:hidden}
 .deck{width:100%;height:100dvh;position:relative}
@@ -607,33 +710,37 @@ function buildPres(slides,plan,theme,opts,presTitle,lang){
 .inner{width:100%;height:100%;padding:clamp(2rem,5vw,5rem) clamp(2rem,8vw,8rem);display:flex;flex-direction:column;justify-content:center;background:${T.sb};font-family:${T.bf}}
 .cover .inner{background:${T.cb}}
 .ey{font-family:${T.mf};font-size:clamp(.55rem,1vw,.8rem);letter-spacing:.18em;text-transform:uppercase;opacity:.5;margin-bottom:.8rem;color:${T.ink}}
-h1{font-family:${T.hf};font-size:clamp(2rem,5.5vw,5rem);line-height:1.06;letter-spacing:-.02em;color:${T.ink};margin-bottom:.5em}
+.cover .ey{color:${T.ci}}
+h1{font-family:${T.hf};font-size:clamp(2rem,5.5vw,5rem);line-height:1.06;letter-spacing:-.02em;color:${T.ci};margin-bottom:.5em}
 h2{font-family:${T.hf};font-size:clamp(1.5rem,3.5vw,3.4rem);line-height:1.1;letter-spacing:-.015em;color:${T.ink};margin-bottom:.4em}
+.cover h2{color:${T.ci}}
 h2 em{font-style:italic;color:${T.ac}}
 p{font-size:clamp(.82rem,1.3vw,1.05rem);color:${T.mt};line-height:1.65;max-width:60ch}
+.cover p{color:${ci_mt}}
 .sub{font-size:clamp(.85rem,1.5vw,1.1rem);color:${T.mt};font-style:italic;margin-bottom:1rem}
+.cover .sub{color:${ci_mt}}
 .ab{width:clamp(2.5rem,7vw,6rem);height:2px;background:${T.ac};border-radius:2px;margin-bottom:1.5rem}
 .tag{font-family:${T.mf};font-size:clamp(.5rem,.85vw,.72rem);letter-spacing:.1em;text-transform:uppercase;padding:.25em .8em;border-radius:2em;border:1px solid ${T.rl};color:${T.mt};margin-bottom:.8rem;display:inline-block}
 ul{list-style:none;display:flex;flex-direction:column;gap:.65em;max-width:800px;width:100%}
-li{padding:.65em 1em;background:${T.rl};border-left:3px solid ${T.ac};border-radius:0 .5rem .5rem 0;font-size:clamp(.78rem,1.4vw,1rem);color:${T.ink};line-height:1.5;font-family:${T.bf}}
-bq{display:block;border-left:4px solid ${T.ac2};padding:1em 1.6em;background:${T.rl};border-radius:0 .6rem .6rem 0;font-size:clamp(1.1rem,2.2vw,2rem);font-style:italic;color:${T.ink};line-height:1.55;max-width:700px;font-family:${T.hf}}
+li{padding:.65em 1em;background:${T.li_bg};border-left:3px solid ${T.ac};border-radius:0 .5rem .5rem 0;font-size:clamp(.78rem,1.4vw,1rem);color:${T.ink};line-height:1.5;font-family:${T.bf}}
+bq{display:block;border-left:4px solid ${T.ac2};padding:1em 1.6em;background:${T.li_bg};border-radius:0 .6rem .6rem 0;font-size:clamp(1.1rem,2.2vw,2rem);font-style:italic;color:${T.ink};line-height:1.55;max-width:700px;font-family:${T.hf}}
 .simg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.13}
 .ov{position:absolute;inset:0;background:rgba(0,0,0,.45)}
 .cnt{position:relative;z-index:1;width:100%;max-width:960px;display:flex;flex-direction:column}
 .cnt.c{align-items:center;text-align:center}
 .tc{display:grid;grid-template-columns:1fr 1fr;gap:2em;width:100%}
-.col{padding:1.2em;background:${T.rl};border-radius:.5rem}
+.col{padding:1.2em;background:${T.li_bg};border-radius:.5rem}
 .dn{position:absolute;right:clamp(1.5rem,5vw,5rem);bottom:clamp(1.5rem,4vw,3.5rem);font-family:${T.hf};font-size:clamp(5rem,18vw,16rem);color:${T.rl};line-height:1;pointer-events:none;user-select:none}
 .bg{position:absolute;inset:0;background-image:linear-gradient(${T.rl} 1px,transparent 1px),linear-gradient(90deg,${T.rl} 1px,transparent 1px);background-size:55px 55px;pointer-events:none}
 .rev{opacity:0;transform:translateY(1rem);transition:opacity .5s ease,transform .5s ease}
 .on .rev{opacity:1;transform:translateY(0)}
 .rev:nth-child(1){transition-delay:.05s}.rev:nth-child(2){transition-delay:.15s}.rev:nth-child(3){transition-delay:.25s}.rev:nth-child(4){transition-delay:.35s}.rev:nth-child(5){transition-delay:.45s}
 ${opts.prog?`#pb{position:fixed;top:0;left:0;height:2px;background:${T.ac};transition:width .4s cubic-bezier(.4,0,.2,1);z-index:100}`:''}
-#ct{position:fixed;bottom:clamp(.7rem,1.5vw,1.1rem);right:clamp(.9rem,2vw,1.8rem);font-family:${T.mf};font-size:clamp(.5rem,.78vw,.64rem);letter-spacing:.12em;color:rgba(255,255,255,.18);z-index:100;user-select:none}
-.nb{position:fixed;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);color:rgba(255,255,255,.35);width:clamp(1.8rem,3vw,2.4rem);height:clamp(1.8rem,3vw,2.4rem);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.2s;backdrop-filter:blur(4px);z-index:100;font-size:.85rem}
-.nb:hover{color:rgba(255,255,255,.75)}.prev{left:clamp(.4rem,.8vw,.8rem)}.next{right:clamp(.4rem,.8vw,.8rem)}
+#ct{position:fixed;bottom:clamp(.7rem,1.5vw,1.1rem);right:clamp(.9rem,2vw,1.8rem);font-family:${T.mf};font-size:clamp(.5rem,.78vw,.64rem);letter-spacing:.12em;color:rgba(128,128,128,.5);z-index:100;user-select:none}
+.nb{position:fixed;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.2);border:1px solid rgba(128,128,128,.2);color:rgba(128,128,128,.5);width:clamp(1.8rem,3vw,2.4rem);height:clamp(1.8rem,3vw,2.4rem);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.2s;backdrop-filter:blur(4px);z-index:100;font-size:.85rem}
+.nb:hover{color:${T.ac}}.prev{left:clamp(.4rem,.8vw,.8rem)}.next{right:clamp(.4rem,.8vw,.8rem)}
 ${opts.notes?`#np{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,.92);color:rgba(255,255,255,.45);padding:12px 22px;font-size:.72rem;font-family:${T.mf};display:none;border-top:1px solid rgba(255,255,255,.07);z-index:99;max-height:120px;overflow-y:auto}#np.on{display:block}`:''}
-${opts.timer?`#tmr{position:fixed;top:clamp(.7rem,1.5vw,1.1rem);left:clamp(.9rem,2vw,1.8rem);font-family:${T.mf};font-size:clamp(.5rem,.78vw,.64rem);letter-spacing:.1em;color:rgba(255,255,255,.2);z-index:100}`:''}
+${opts.timer?`#tmr{position:fixed;top:clamp(.7rem,1.5vw,1.1rem);left:clamp(.9rem,2vw,1.8rem);font-family:${T.mf};font-size:clamp(.5rem,.78vw,.64rem);letter-spacing:.1em;color:rgba(128,128,128,.5);z-index:100}`:''}
 @media(prefers-reduced-motion:reduce){.slide,.rev{transition:opacity .2s !important;transform:none !important}}
 `;
 
