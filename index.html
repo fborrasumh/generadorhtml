@@ -628,10 +628,21 @@ OBLIGATORIO: exactamente ${batch.length} objetos en el array, con nums ${batchNu
     setAg('ag-writer','done');
     setAg('ag-visual','active');setP(55,'Agente 3/5 — Visual: Unsplash…');log('🖼 Visual: asignando imágenes…','ag');
     const imgMap={};
-    if(opts.imgs)cont.slides.forEach(sl=>{
+    // Picsum Photos con IDs numéricos — fiables, sin registro, libres de derechos
+    // Pool de IDs con temática natural/científica/arquitectura
+    const picsumPool=[10,11,12,13,14,15,16,17,20,21,22,23,24,25,26,27,
+      100,101,102,103,104,106,107,108,109,110,111,112,113,114,115,116,
+      142,143,144,145,146,147,158,159,160,161,162,163,164,165,166,167,
+      200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,
+      229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,
+      259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,
+      292,293,294,295,296,297,298,299,300,301,302,303,304,305,306,307,
+      326,327,328,329,330,331,332,333,334,335,336,337,338,339,340,341,
+      366,367,368,369,370,371,372,373,374,375,376,377,378,379,380,381];
+    if(opts.imgs)cont.slides.forEach((sl,idx)=>{
       if(S.cancelled)return;
-      const seed=encodeURIComponent((sl.image_query||title+' '+sl.title).slice(0,20).replace(/\s+/g,'-').toLowerCase());
-      imgMap[sl.num]=`https://picsum.photos/seed/${seed}${sl.num}/1200/675`;
+      const pid=picsumPool[idx % picsumPool.length];
+      imgMap[sl.num]=`https://picsum.photos/id/${pid}/1200/675`;
     });
     if(!S.cancelled){setAg('ag-visual','done');log('✓ Imágenes Unsplash (libres de derechos)','ok');}
     if(S.cancelled)return;
@@ -767,9 +778,9 @@ ul{list-style:none;display:flex;flex-direction:column;gap:.65em;max-width:800px;
 li{padding:.65em 1em;background:${T.li_bg};border-left:3px solid ${T.ac};border-radius:0 .5rem .5rem 0;font-size:clamp(.78rem,1.4vw,1rem);color:${T.ink};line-height:1.5;font-family:${T.bf}}
 .cover li,.closing li{background:rgba(255,255,255,.1);color:${T.ci}}
 bq{display:block;border-left:4px solid ${T.ac2};padding:1em 1.6em;background:${T.li_bg};border-radius:0 .6rem .6rem 0;font-size:clamp(1.1rem,2.2vw,2rem);font-style:italic;color:${T.ink};line-height:1.55;max-width:700px;font-family:${T.hf}}
-.simg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.45}
-.ov{position:absolute;inset:0;background:rgba(0,0,0,.35)}
-.cnt{position:relative;z-index:1;width:100%;max-width:960px;display:flex;flex-direction:column}
+.simg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.45;z-index:0}
+.ov{position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:1}
+.cnt{position:relative;z-index:2;width:100%;max-width:960px;display:flex;flex-direction:column}
 .cnt.c{align-items:center;text-align:center}
 .tc{display:grid;grid-template-columns:1fr 1fr;gap:2em;width:100%}
 .col{padding:1.2em;background:${T.li_bg};border-radius:.5rem}
@@ -793,12 +804,12 @@ ${opts.timer?`#tmr{position:fixed;top:clamp(.7rem,1.5vw,1.1rem);left:clamp(.9rem
   const timerJS=opts.timer?`let _ts=0,_ti;function startT(){clearInterval(_ti);_ts=0;_ti=setInterval(()=>{_ts++;const e=document.getElementById('tmr');if(e)e.textContent=String(Math.floor(_ts/60)).padStart(2,'0')+':'+String(_ts%60).padStart(2,'0');},1000);}startT();`:'';
 
   const bSlide=(sl,i)=>{
-    const img=sl.imgUrl?`<img class="simg" src="${sl.imgUrl}" alt="" loading="lazy" onerror="this.style.display='none'">`:'';
+    const img=sl.imgUrl?`<img class="simg" src="${sl.imgUrl}" alt="" loading="eager">`:'';
     const ov=sl.imgUrl?`<div class="ov"></div>`:'';
     let body='';
     if(sl.type==='cover'){body=`<div class="bg"></div><div class="ab rev"></div><p class="ey rev">${escH(sl.subtitle||'')}</p><h1 class="rev">${escH(sl.title||'')}</h1><p class="sub rev">${escH(sl.body||'')}</p><div class="dn" aria-hidden="true">01</div>`;}
     else if(sl.type==='quote'){body=`${img}${ov}<div class="cnt c"><bq class="rev">"${escH(sl.quote||sl.body||'')}"</bq>${sl.subtitle?`<p class="rev" style="margin-top:1.2em">— ${escH(sl.subtitle)}</p>`:''}</div>`;}
-    else if(sl.type==='image-full'){body=`${sl.imgUrl?`<img src="${sl.imgUrl}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55" onerror="this.style.display='none'">`:img}<div class="ov" style="background:rgba(0,0,0,.55)"></div><div class="cnt c"><h2 class="rev">${escH(sl.title||'')}</h2><p class="sub rev">${escH(sl.subtitle||sl.body||'')}</p></div>`;}
+    else if(sl.type==='image-full'){body=`${sl.imgUrl?`<img src="${sl.imgUrl}" alt="" loading="eager" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55;z-index:0">`:img}<div class="ov" style="background:rgba(0,0,0,.55);z-index:1"></div><div class="cnt c"><h2 class="rev">${escH(sl.title||'')}</h2><p class="sub rev">${escH(sl.subtitle||sl.body||'')}</p></div>`;}
     else if(sl.type==='two-col'){const cols=(sl.body||'').includes('class="col"')?sl.body:`<div class="col"><p>${escH(sl.body||sl.subtitle||'')}</p></div><div class="col"><ul>${(sl.bullets||[]).map(b=>`<li>${escH(b)}</li>`).join('')}</ul></div>`;body=`${img}${ov}<div class="cnt"><p class="ey rev">${sl.type}</p><h2 class="rev">${escH(sl.title||'')}</h2><div class="tc rev">${cols}</div></div>`;}
     else if(sl.type==='closing'){body=`<div class="bg"></div><div class="cnt c"><div class="ab rev"></div><h2 class="rev">${escH(sl.title||'Gracias')}</h2><p class="sub rev">${escH(sl.subtitle||'')}</p>${(sl.bullets||[]).length?`<ul class="rev" style="text-align:left">${sl.bullets.map(b=>`<li>${escH(b)}</li>`).join('')}</ul>`:''}</div>`;}
     else{body=`${img}${ov}<div class="cnt"><p class="ey rev">${sl.type}</p><h2 class="rev">${escH(sl.title||'')}</h2>${sl.body?`<p class="rev">${escH(sl.body)}</p>`:''}${(sl.bullets||[]).length?`<ul class="rev">${sl.bullets.map(b=>`<li>${escH(b)}</li>`).join('')}</ul>`:''}</div>`;}
